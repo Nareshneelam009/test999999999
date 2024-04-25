@@ -39,6 +39,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 import java.util.stream.Stream;
@@ -47,8 +49,10 @@ import net.sf.json.JSONException;
 import net.sf.json.JSONObject;
 import org.apache.commons.httpclient.URI;
 import org.apache.commons.httpclient.URIException;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.core.LoggerContext;
 import org.parosproxy.paros.Constant;
 import org.parosproxy.paros.control.Control;
 import org.parosproxy.paros.control.Control.Mode;
@@ -85,6 +89,8 @@ import org.zaproxy.zap.utils.ZapSupportUtils;
 public class CoreAPI extends ApiImplementor implements SessionListener {
 
     private static final Logger LOGGER = LogManager.getLogger(CoreAPI.class);
+    private static final String PAROS_PACKAGE = "org.parosproxy.paros";
+    private static final String ZAP_PACKAGE = "org.zaproxy";
 
     private enum ScanReportType {
         HTML,
@@ -161,6 +167,9 @@ public class CoreAPI extends ApiImplementor implements SessionListener {
     private static final String VIEW_OPTION_ALERT_OVERRIDES_FILE_PATH =
             "optionAlertOverridesFilePath";
 
+    private static final String VIEW_LOGGING_GENERAL = "loggingGeneral";
+    private static final String VIEW_LOGGING_DETAILED = "loggingDetailed";
+
     private static final String OTHER_PROXY_PAC = "proxy.pac";
     private static final String OTHER_SET_PROXY = "setproxy";
     private static final String OTHER_ROOT_CERT = "rootcert";
@@ -204,6 +213,7 @@ public class CoreAPI extends ApiImplementor implements SessionListener {
     private static final String PARAM_INDEX = "index";
     private static final String PARAM_FILENAME = "fileName";
     private static final String PARAM_CONTENTS = "fileContents";
+    private static final String PARAM_BASE_PACKAGE = "basepackage";
 
     private static final List<String> PARAMS_STRING = Collections.singletonList("String");
     private static final List<String> PARAMS_BOOLEAN = Collections.singletonList("Boolean");
@@ -391,7 +401,10 @@ public class CoreAPI extends ApiImplementor implements SessionListener {
                                 VIEW_NUMBER_OF_ALERTS,
                                 null,
                                 new String[] {PARAM_BASE_URL, PARAM_RISK}))));
-
+        this.addApiView(new ApiView(VIEW_LOGGING_GENERAL));
+        this.addApiView(
+                new ApiView(
+                        VIEW_LOGGING_DETAILED, new String[] {}, new String[] {PARAM_BASE_PACKAGE}));
         this.addApiOthers(deprecatedNetworkApi(new ApiOther(OTHER_PROXY_PAC, false)));
         this.addApiOthers(deprecatedNetworkApi(new ApiOther(OTHER_ROOT_CERT, false)));
         this.addApiOthers(
@@ -1294,6 +1307,32 @@ public class CoreAPI extends ApiImplementor implements SessionListener {
             result =
                     new ApiResponseElement(
                             name, getAlertParam(ApiException.Type.BAD_VIEW).getOverridesFilename());
+        } else if (VIEW_LOGGING_GENERAL.equals(name)) {
+            var config = LoggerContext.getContext().getConfiguration();
+            result =
+                    new ApiResponseSet<String>(
+                            name,
+                            Map.of(
+                                    PAROS_PACKAGE,
+                                    config.getLoggerConfig(PAROS_PACKAGE).getLevel().name(),
+                                    ZAP_PACKAGE,
+                                    config.getLoggerConfig(ZAP_PACKAGE).getLevel().name()));
+        } else if (VIEW_LOGGING_DETAILED.equals(name)) {
+            String basePackage = ApiUtils.getOptionalStringParam(params, PARAM_BASE_PACKAGE);
+            SortedMap<String, String> loggerDetails = new TreeMap<>();
+            for (Logger logger : LoggerContext.getContext().getLoggers()) {
+                if (!logger.getName().contains(".")) {
+                    // Skip loggers like: disabled, root, test
+                    continue;
+                }
+                if (basePackage.isEmpty()
+                        || (!basePackage.isEmpty()
+                                && StringUtils.startsWithIgnoreCase(
+                                        logger.getName(), basePackage))) {
+                    loggerDetails.put(logger.getName(), logger.getLevel().name());
+                }
+            }
+            result = new ApiResponseSet<String>(name, loggerDetails);
         } else {
             throw new ApiException(ApiException.Type.BAD_VIEW);
         }
